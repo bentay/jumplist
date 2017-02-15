@@ -60,10 +60,33 @@
 (defvar jumplist--jumping nil
   "Jumplist state.")
 
+(defvar jumplist--edit-dist 80
+  "Jumplist edit distance.")
+
+(defvar jumplist--buffer nil
+  "Jumplist buffer.")
+
+(defun jumplist--show-list ()
+  (interactive)
+  (setq jumplist--buffer (get-buffer-create "*Jump List*"))
+  (let ((idx (length jumplist--list)))
+    (with-current-buffer jumplist--buffer
+      (erase-buffer)
+      (while (> idx 0)
+        (setq idx (- idx 1))
+        (insert (format "%s%d: %s:%d\n"
+                       (if (= idx jumplist--idx) "*" " ")
+                       idx
+                       (car (car (nth idx jumplist--list)))
+                       (cdr (car (nth idx jumplist--list))))))
+      (beginning-of-buffer))
+    (fit-window-to-buffer (display-buffer jumplist--buffer))))
+
 (defun jumplist--do-jump (buff)
   "Do jump to target file and point from BUFF."
-  (find-file (car buff))
-  (goto-char (cdr buff)))
+  (find-file (car (car buff)))
+  (goto-char (cdr buff))
+  (jumplist--refresh-window))
 
 (defun jumplist--reset-idx ()
   "Reset `jumplist--idx'."
@@ -77,6 +100,10 @@
   "Check `jumplist--idx' is first of list."
   (= jumplist--idx 0))
 
+(defun jumplist--empty? ()
+  "Check `jumplist--list' is empty."
+  (= (length jumplist--list) 0))
+
 (defun jumplist--dec-idx ()
   "Descrement `jumplist--idx'."
   (setq jumplist--idx (- jumplist--idx 1)))
@@ -89,24 +116,32 @@
   "Drop item form list of IDX."
   (setq jumplist--list (nthcdr jumplist--idx jumplist--list)))
 
+(defun jumplist--refresh-window ()
+  (if (and jumplist--buffer (get-buffer-window jumplist--buffer)) (jumplist--show-list)))
+
 (defun jumplist--push (pointer)
   "Push POINTER to `jumplist'."
   (while (> (length jumplist--list) jumplist-max-length)
     (nbutlast jumplist--list 1))
-  (push pointer jumplist--list))
+  (push pointer jumplist--list)
+  (jumplist--reset-idx)
+  (jumplist--refresh-window))
 
 (defun jumplist--same-position? (pointer)
-  (let ((new-point (cdr pointer))
-        (top-point (cdar jumplist--list)))
-    (cond ((not new-point) nil)
+  (jumplist--same-position-impl? (cdr pointer) jumplist--list))
+
+(defun jumplist--same-position-impl? (pointer jlist)
+  (let ((top-point (car jlist)))
+    (cond ((not pointer) nil)
           ((not top-point) nil)
-          ((eq (marker-position new-point) (marker-position top-point)) 't))))
+          ((not (cdr top-point)) nil)
+          ((eq (marker-position pointer) (marker-position (cdr top-point))) 't))))
 
 (defun jumplist--set ()
-  "The record data structure is (file-name . pointer)."
+  "The record data structure is ((file-name . line-number) . pointer)."
   (interactive)
   (if (buffer-file-name)
-      (let ((pointer (cons (buffer-file-name) (point-marker))))
+      (let ((pointer (cons (cons (buffer-file-name) (line-number-at-pos)) (point-marker))))
         (unless (jumplist--same-position? pointer)
           (when (and jumplist-ex-mode jumplist--jumping)
             (jumplist--drop! jumplist--idx)
@@ -114,6 +149,15 @@
             (jumplist--reset-idx))
           (unless (jumplist--same-position? pointer)
             (jumplist--push pointer))))))
+
+(defun jumplist--check-edit-dist (f s)
+  (if (jumplist--empty?) (jumplist--set)
+      (let ((top-point (marker-position (cdar jumplist--list))))
+        (cond ((< jumplist--edit-dist (abs (- f s))) (jumplist--set))
+              ((< jumplist--edit-dist (abs (- top-point s))) (jumplist--set))
+              ((< jumplist--edit-dist (abs (- top-point f))) (jumplist--set))
+              ('t nil)))))
+(add-hook 'before-change-functions 'jumplist--check-edit-dist)
 
 (defun jumplist--do-command? (command do-hook-command-list)
   (if do-hook-command-list
@@ -129,6 +173,7 @@
          (not (memq this-command '(jumplist-previous jumplist-next))))
     (jumplist--set))))
 (add-hook 'pre-command-hook 'jumplist--command-hook)
+(add-hook 'post-command-hook 'jumplist--command-hook)
 
 ;;;###autoload
 (defun jumplist-previous ()
@@ -137,7 +182,8 @@
   (if (or (not jumplist--list)
           (and (not (jumplist--first?))
                (jumplist--last?)))
-      (message "No further undo point.")
+      (progn (setq jumplist--jumping nil)
+      (message "No further undo point."))
     (if jumplist-ex-mode
         (unless jumplist--jumping
           (jumplist--set)
@@ -152,7 +198,8 @@
   (interactive)
   (if (or (not jumplist--list)
           (jumplist--first?))
-      (message "No further redo point.")
+      (progn (setq jumplist--jumping nil)
+      (message "No further redo point."))
     (if jumplist-ex-mode
         (unless jumplist--jumping
           (jumplist--set)
