@@ -60,6 +60,9 @@
 (defvar jumplist--jumping nil
   "Jumplist state.")
 
+(defvar jumplist--pushing nil
+  "Jumplist hook in progress.")
+
 (defvar jumplist--edit-dist 80
   "Jumplist edit distance.")
 
@@ -84,7 +87,7 @@
 
 (defun jumplist--do-jump (buff)
   "Do jump to target file and point from BUFF."
-  (find-file (car (car buff)))
+  (switch-to-buffer (car (car buff)))
   (goto-char (cdr buff))
   (jumplist--refresh-window))
 
@@ -140,15 +143,17 @@
 (defun jumplist--set ()
   "The record data structure is ((file-name . line-number) . pointer)."
   (interactive)
-  (if (buffer-file-name)
-      (let ((pointer (cons (cons (buffer-file-name) (line-number-at-pos)) (point-marker))))
+  (unless jumplist--pushing
+    (setq jumplist--pushing t)
+      (let ((pointer (cons (cons (buffer-name) (line-number-at-pos)) (point-marker))))
         (unless (jumplist--same-position? pointer)
           (when (and jumplist-ex-mode jumplist--jumping)
             (jumplist--drop! jumplist--idx)
             (setq jumplist--jumping nil)
             (jumplist--reset-idx))
           (unless (jumplist--same-position? pointer)
-            (jumplist--push pointer))))))
+            (jumplist--push pointer))))
+  (setq jumplist--pushing nil)))
 
 (defun jumplist--check-edit-dist (f s)
   (if (jumplist--empty?) (jumplist--set)
@@ -173,7 +178,6 @@
          (not (memq this-command '(jumplist-previous jumplist-next))))
     (jumplist--set))))
 (add-hook 'pre-command-hook 'jumplist--command-hook)
-(add-hook 'post-command-hook 'jumplist--command-hook)
 
 ;;;###autoload
 (defun jumplist-previous ()
